@@ -170,7 +170,7 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
     __android_log_print(ANDROID_LOG_INFO, "FaceNative", "pred stats: N=%d max_coord=%.6f conf(max/min/mean)=%.6f/%.6f/%.6f normalized=%d",
                         Npred, max_coord, max_conf, min_conf, mean_conf, normalized?1:0);
 
-    // print first few raw preds for inspection
+   
     int show = std::min(20, Npred);
     for (int i=0;i<show;++i) {
         __android_log_print(ANDROID_LOG_INFO, "FaceNative",
@@ -179,7 +179,7 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
     }
 // ---------- 更鲁棒的 stride 推断与自动解码选择 ----------
     int inferred_stride = 0;
-// gather unique rounded cx and compute diffs
+
     std::vector<int> uniq;
     uniq.reserve(Npred);
     for (int i = 0; i < Npred; ++i) uniq.push_back((int)round(preds[i][0]));
@@ -190,7 +190,7 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
         int d = uniq[i] - uniq[i-1];
         if (d > 0 && d < INPUT_SIZE) diffs.push_back(d);
     }
-// find mode of diffs but ignore tiny diffs (<=1)
+
     std::unordered_map<int,int> cnt;
     for (int d : diffs) if (d > 1) cnt[d]++;
     int bestd = 0, bestc = 0;
@@ -212,10 +212,10 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
             }
         if (g > 1) inferred_stride = g;
     }
-// if still no inference, try common stride candidates by testing later
+
     __android_log_print(ANDROID_LOG_INFO, "FaceNative", "initial inferred_stride = %d (unique cx count=%zu, diffs sample=%zu)", inferred_stride, uniq.size(), diffs.size());
 
-// candidate stride list to try (will include inferred_stride if valid)
+
     std::vector<int> stride_candidates = {4,8,16,32,64};
     if (inferred_stride > 1) {
         // put inferred at front if not already present
@@ -228,10 +228,9 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
         }
     }
 
-// helper: try decode with given stride/mode/w_option and count 'good' boxes after basic filtering
+
     auto try_decode_count = [&](int stride, int mode, int w_opt)->int {
-        // mode: 0 pixel, 1 grid*stride, 2 (grid+0.5)*stride
-        // w_opt: 0 => w_px = w * stride; 1 => w_px = exp(w) * stride (useful if w is log-space)
+      
         const float MIN_SIZE = 24.0f;
         int good = 0;
         for (int i = 0; i < Npred; ++i) {
@@ -250,12 +249,12 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
                 else { cx_px = (cx + 0.5f) * stride; cy_px = (cy + 0.5f) * stride;
                     w_px = (w_opt==0 ? w*stride : expf(w) * stride); h_px = (w_opt==0 ? h*stride : expf(h) * stride); }
             }
-            // center->xyxy (net input coords)
+          
             float x1 = cx_px - w_px * 0.5f;
             float y1 = cy_px - h_px * 0.5f;
             float x2 = cx_px + w_px * 0.5f;
             float y2 = cy_px + h_px * 0.5f;
-            // inverse letterbox -> original image coords
+          
             x1 = (x1 - pad_w) / std::max(1e-6f, scale);
             y1 = (y1 - pad_h) / std::max(1e-6f, scale);
             x2 = (x2 - pad_w) / std::max(1e-6f, scale);
@@ -266,7 +265,6 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
         return good;
     };
 
-// evaluate all combos and log
     struct TryRec { int stride, mode, wopt, cnt; };
     std::vector<TryRec> tries;
     for (int stride : stride_candidates) {
@@ -278,7 +276,6 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
         }
     }
 
-// pick best by max cnt
     int best_stride = stride_candidates.front();
     int best_mode = 0;
     int best_wopt = 0;
@@ -288,7 +285,6 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
     }
     __android_log_print(ANDROID_LOG_INFO, "FaceNative", "selected stride=%d mode=%d wopt=%d (count=%d)", best_stride, best_mode, best_wopt, best_cnt);
 
-// fallback if best_cnt <= 0
     if (best_cnt <= 0) {
         __android_log_print(ANDROID_LOG_ERROR, "FaceNative", "所有解码组合尝试后均无有效候选（best_cnt=0）。请降低 score_threshold 或贴 raw preds 供进一步分析。");
         // still choose a fallback stride to avoid crash
@@ -296,14 +292,11 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
         best_mode = 1; best_wopt = 0;
     }
 
-// now use (best_stride, best_mode, best_wopt) as selected decoding parameters
+
     inferred_stride = best_stride;
     int selected_mode = best_mode;
     int selected_wopt = best_wopt;
     __android_log_print(ANDROID_LOG_INFO, "FaceNative", "FINAL decode selection -> stride=%d mode=%d wopt=%d", inferred_stride, selected_mode, selected_wopt);
-
-// 接下来用 selected_mode/stride/wopt 做正式解码（你的后续 candidates 解码部分应使用这些值）
-
 
 // ------------------- 用选中的 decode 模式做完整解码 -> candidates -------------------
     struct Candidate { float x1,y1,x2,y2,score,cx,cy; };
@@ -330,8 +323,6 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
             w_px = (selected_wopt == 0 ? w * inferred_stride : expf(w) * inferred_stride);
             h_px = (selected_wopt == 0 ? h * inferred_stride : expf(h) * inferred_stride);
         }
-        // ... 后续代码保持不变 ...
-
         float x1 = cx_px - w_px*0.5f;
         float y1 = cy_px - h_px*0.5f;
         float x2 = cx_px + w_px*0.5f;
@@ -379,7 +370,6 @@ int FaceDetector::detect(ncnn::Mat &in, std::vector<FaceInfo> &faceList,
     }
 
     // ------------------- 贪心合并 (center-based) + final NMS -------------------
-    // 这部分使用你之前在用的合并逻辑（我保留了可调参数）
     std::sort(candidates.begin(), candidates.end(), [](const Candidate &a, const Candidate &b){ return a.score > b.score; });
     const float CLUSTER_RADIUS = 60.0f; // 可根据 NN median 调整
     const float IOU_GROUP = 0.4f;
